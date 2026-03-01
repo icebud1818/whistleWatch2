@@ -724,7 +724,7 @@ function updateFilterInfo() {
 
 
 async function reloadData() {
-  const res = await fetch(`${API_BASE}/api/data` + getSeasonParam());
+  const res = ;
   if (!res.ok) return;
   appData = await res.json();
   renderAll();
@@ -761,9 +761,35 @@ function updateStatusUI() {
 }
 
 async function loadData() {
-  const res = await fetch(`${API_BASE}/api/data`);
-  if (!res.ok) return;
-  appData = await res.json();
+  try {
+    document.getElementById('loadingScreen').style.display = 'flex';
+    document.getElementById('loadingText').textContent = 'Loading match data…';
+    // Use a relative path so it works on GitHub Pages subdirectories too
+    const url = new URL('data.json', window.location.href).href;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — could not load data.json`);
+    rawData = await res.json();
+    applySeasonFilter();
+  } catch(e) {
+    console.error('Failed to load data.json:', e);
+    document.getElementById('loadingScreen').innerHTML =
+      `<div class="loading-title" style="color:var(--accent2)">Failed to load data</div>
+       <div class="loading-text">${e.message}</div>`;
+  }
+}
+
+function applySeasonFilter() {
+  if (!rawData) return;
+  if (activeSeasons.size === 0) {
+    appData = rawData.all;
+  } else if (activeSeasons.size === 1) {
+    const s = [...activeSeasons][0];
+    appData = rawData.seasons[String(s)] || rawData.all;
+  } else {
+    // Multiple seasons — use combined for now
+    appData = rawData.all;
+  }
+  document.getElementById('loadingScreen').style.display = 'none';
   renderAll();
   updateFilterInfo();
 }
@@ -1195,14 +1221,6 @@ function renderCharts() {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 pollStatus();
-// If data was already ready, poll again in case we missed it
-setTimeout(async () => {
-  if (!appData) {
-    const res = await fetch(`${API_BASE}/api/status`);
-    const s = await res.json();
-    if (s.status === 'ready') await loadData();
-  }
-}, 500);
 </script>
 </body>
 </html>

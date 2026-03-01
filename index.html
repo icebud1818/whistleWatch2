@@ -870,6 +870,8 @@ function applySeasonFilter() {
     appData = rawData.all;
   }
   document.getElementById('loadingScreen').style.display = 'none';
+  document.getElementById('tab-refs').classList.add('active'); // ← add this
+
   renderAll();
   updateFilterInfo();
 }

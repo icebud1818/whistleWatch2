@@ -783,10 +783,11 @@ function applySeasonFilter() {
     const s = [...activeSeasons][0];
     appData = rawData.seasons[String(s)] || rawData.all;
   } else {
-    // Multiple seasons selected — use combined for now
     appData = rawData.all;
   }
   document.getElementById('loadingScreen').style.display = 'none';
+  // Ensure the refs tab is visible after load
+  document.getElementById('tab-refs').classList.add('active');
   renderAll();
   updateFilterInfo();
 }

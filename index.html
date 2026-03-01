@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhistleWatch — PL Referee Bias</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=JetBrains+Mono:wght@400;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0a0b0e;
+  --surface: #12141a;
+  --surface2: #1a1d26;
+  --surface3: #222633;
+  --accent: #e8ff47;
+  --accent2: #ff4d6d;
+  --accent3: #47c8ff;
+  --text: #f0f0f0;
+  --muted: #6b7280;
+  --border: #2a2d3a;
+  --green: #4ade80;
+  --orange: #fb923c;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Barlow', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ─ HEADER ─ */
+header {
+  background: var(--surface);
+  border-bottom: 2px solid var(--accent);
+  padding: 0 2rem;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  height: 64px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 1.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.logo span { color: var(--text); }
+
+.header-status {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+  animation: pulse 2s infinite;
+}
+.status-dot.ready { background: var(--green); animation: none; }
+.status-dot.loading { background: var(--accent); }
+.status-dot.error { background: var(--accent2); animation: none; }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.refresh-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 0.3rem 0.8rem;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+}
+.refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+
+/* ─ SEASON FILTER ─ */
+.season-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 2rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.season-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 0.25rem;
+}
+.season-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.season-chip:hover { border-color: var(--accent); color: var(--accent); }
+.season-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 700;
+}
+.season-chip-all {
+  border-color: var(--muted);
+  margin-right: 0.5rem;
+}
+.season-chip-all.active { background: var(--surface3); border-color: var(--text); color: var(--text); }
+.filter-info {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+/* ─ TABS ─ */
+.tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 2rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.75rem 1.5rem;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+  position: relative;
+  top: 1px;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn:hover:not(.active) { color: var(--text); }
+
+/* ─ LAYOUT ─ */
+main { padding: 2rem; max-width: 1600px; margin: 0 auto; }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ─ LOADING ─ */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  gap: 1.5rem;
+}
+.loading-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 2rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.progress-bar-wrap {
+  width: 400px;
+  max-width: 90vw;
+  height: 4px;
+  background: var(--surface3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+  border-radius: 2px;
+}
+.loading-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ─ STATS GRID ─ */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 1.2rem;
+  border-radius: 6px;
+}
+.stat-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.4rem;
+}
+.stat-value {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 2rem;
+  color: var(--accent);
+}
+
+/* ─ SECTION HEADERS ─ */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  margin-top: 2rem;
+}
+.section-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+.section-line { flex: 1; height: 1px; background: var(--border); }
+
+/* ─ CONTROLS ─ */
+.controls {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.search-input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.85rem;
+  width: 220px;
+  transition: border-color 0.2s;
+}
+.search-input:focus { outline: none; border-color: var(--accent); }
+.search-input::placeholder { color: var(--muted); }
+
+select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+select:focus { outline: none; border-color: var(--accent); }
+select option { background: var(--surface); }
+
+/* ─ TABLE ─ */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+thead th {
+  background: var(--surface2);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+  border-bottom: 1px solid var(--border);
+}
+thead th:hover { color: var(--accent); }
+thead th.sorted { color: var(--accent); }
+thead th.sorted::after { content: " ▼"; font-size: 0.6rem; }
+thead th.sorted.asc::after { content: " ▲"; }
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--surface2); }
+tbody td {
+  padding: 0.65rem 1rem;
+  white-space: nowrap;
+}
+.name-cell {
+  font-weight: 600;
+  color: var(--text);
+}
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.pill-red { background: rgba(255,77,109,0.15); color: var(--accent2); }
+.pill-yellow { background: rgba(232,255,71,0.12); color: var(--accent); }
+.pill-blue { background: rgba(71,200,255,0.12); color: var(--accent3); }
+.pill-green { background: rgba(74,222,128,0.12); color: var(--green); }
+.pill-orange { background: rgba(251,146,60,0.12); color: var(--orange); }
+.pill-neutral { background: rgba(107,114,128,0.15); color: var(--muted); }
+
+/* ─ CHART CONTAINERS ─ */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem;
+}
+.chart-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 1.25rem;
+}
+.chart-wrap { position: relative; }
+
+/* ─ REF×TEAM PANEL ─ */
+.ref-team-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+.sidebar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sidebar-title {
+  padding: 0.75rem 1rem;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-list {
+  overflow-y: auto;
+  max-height: 600px;
+}
+.sidebar-item {
+  padding: 0.65rem 1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border);
+  transition: all 0.15s;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.sidebar-item:last-child { border-bottom: none; }
+.sidebar-item:hover { background: var(--surface2); }
+.sidebar-item.active { background: var(--surface3); color: var(--accent); }
+.sidebar-item .games-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.detail-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem;
+}
+.detail-ref-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 2rem;
+  text-transform: uppercase;
+  color: var(--text);
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.detail-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+}
+
+/* ─ BIAS BARS ─ */
+.bias-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.bias-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.bias-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid rgba(42,45,58,0.5); }
+.bias-table tr:last-child td { border-bottom: none; }
+.bias-table tr:hover td { background: var(--surface2); }
+
+.bar-wrap { display: flex; align-items: center; gap: 0.5rem; }
+.bar-bg {
+  flex: 1;
+  height: 6px;
+  background: var(--surface3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.bar-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  min-width: 36px;
+  text-align: right;
+}
+.delta-pos { color: var(--green); }
+.delta-neg { color: var(--accent2); }
+.delta-neu { color: var(--muted); }
+
+
+.sample-warning {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+  background: rgba(251,146,60,0.15);
+  color: var(--orange);
+  border: 1px solid rgba(251,146,60,0.3);
+  vertical-align: middle;
+  margin-left: 0.35rem;
+}
+
+/* ─ EMPTY STATE ─ */
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: var(--muted);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* ─ SCROLLBAR ─ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Whistle<span>Watch</span></div>
+  <nav class="tabs">
+    <button class="tab-btn active" onclick="showTab('refs')">Referees</button>
+    <button class="tab-btn" onclick="showTab('teams')">Teams</button>
+    <button class="tab-btn" onclick="showTab('refteam')">Ref × Team</button>
+    <button class="tab-btn" onclick="showTab('charts')">Charts</button>
+  </nav>
+  <div class="header-status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">connecting…</span>
+  </div>
+</header>
+
+<div class="season-bar" id="seasonBar">
+  <span class="season-label">Season</span>
+  <button class="season-chip season-chip-all active" onclick="toggleAllSeasons(this)">All</button>
+  <button class="season-chip" data-season="2022" onclick="toggleSeason(this)">22/23</button>
+  <button class="season-chip" data-season="2023" onclick="toggleSeason(this)">23/24</button>
+  <button class="season-chip" data-season="2024" onclick="toggleSeason(this)">24/25</button>
+  <button class="season-chip" data-season="2025" onclick="toggleSeason(this)">25/26</button>
+  <span class="filter-info" id="filterInfo"></span>
+</div>
+
+<main>
+
+<!-- ─── LOADING ─── -->
+<div id="loadingScreen" class="loading-screen">
+  <div class="loading-title">Loading Match Data</div>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" id="progressBar" style="width:0%"></div>
+  </div>
+  <div class="loading-text" id="loadingText">Fetching matches…</div>
+</div>
+
+<!-- ─── REFS TAB ─── -->
+<div class="tab-panel" id="tab-refs">
+  <div class="stats-row" id="refSummaryCards"></div>
+  <div class="section-header"><span class="section-title">All Referees</span><div class="section-line"></div></div>
+  <div class="controls">
+    <input class="search-input" type="text" placeholder="Search referee…" oninput="filterRefTable(this.value)">
+    <select onchange="sortRefTable(this.value)">
+      <option value="games">Sort: Most Games</option>
+      <option value="foulesPerGame">Sort: Fouls/Game</option>
+      <option value="yellowPerGame">Sort: Yellows/Game</option>
+      <option value="redPerGame">Sort: Reds/Game</option>
+      <option value="foulToYellowRatio">Sort: Foul→Yellow Ratio</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+    <table id="refTable">
+      <thead>
+        <tr>
+          <th>Referee</th>
+          <th onclick="sortRefTable('games')" id="th-ref-games">Games</th>
+          <th onclick="sortRefTable('foulesPerGame')" id="th-ref-fpg">Fouls/G</th>
+          <th onclick="sortRefTable('yellowPerGame')" id="th-ref-ypg">Yellows/G</th>
+          <th onclick="sortRefTable('redPerGame')" id="th-ref-rpg">Reds/G</th>
+          <th onclick="sortRefTable('foulToYellowRatio')">Foul→Yellow</th>
+          <th>Home Fouls/G</th>
+          <th>Away Fouls/G</th>
+          <th>Home Yellow/G</th>
+          <th>Away Yellow/G</th>
+        </tr>
+      </thead>
+      <tbody id="refTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ─── TEAMS TAB ─── -->
+<div class="tab-panel" id="tab-teams">
+  <div class="section-header"><span class="section-title">Team Overview</span><div class="section-line"></div></div>
+  <div class="controls">
+    <input class="search-input" type="text" placeholder="Search team…" oninput="filterTeamTable(this.value)">
+    <select onchange="sortTeamTable(this.value)">
+      <option value="name">Sort: Name</option>
+      <option value="foulesPerGame">Sort: Fouls/Game</option>
+      <option value="yellowPerGame">Sort: Yellows/Game</option>
+      <option value="redPerGame">Sort: Reds/Game</option>
+      <option value="pointsPerGame">Sort: Points/Game</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Team</th>
+          <th>Games</th>
+          <th>Points/G</th>
+          <th>Fouls/G</th>
+          <th>Yellows/G</th>
+          <th>Reds/G</th>
+        </tr>
+      </thead>
+      <tbody id="teamTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="section-header" style="margin-top:2.5rem"><span class="section-title">Team → Ref Breakdown</span><div class="section-line"></div></div>
+  <div class="controls">
+    <select id="teamRefSelect" onchange="renderTeamRefBreakdown()" style="width:220px"></select>
+    <select id="teamRefMetric" onchange="renderTeamRefBreakdown()">
+      <option value="pointsPerGame">Metric: Points/G</option>
+      <option value="foulesPerGame">Metric: Fouls/G</option>
+      <option value="yellowPerGame">Metric: Yellows/G</option>
+      <option value="redPerGame">Metric: Reds/G</option>
+    </select>
+  </div>
+  <div id="teamRefBreakdownContainer"></div>
+</div>
+
+<!-- ─── REF×TEAM TAB ─── -->
+<div class="tab-panel" id="tab-refteam">
+  <div class="ref-team-layout">
+    <div class="sidebar">
+      <div class="sidebar-title">Select Referee</div>
+      <div class="sidebar-list" id="refSidebar"></div>
+    </div>
+    <div class="detail-panel" id="refDetailPanel">
+      <div class="empty-state">Select a referee to see team-by-team breakdown</div>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- ─── CHARTS TAB ─── -->
+<div class="tab-panel" id="tab-charts">
+  <div class="controls">
+    <select id="chartMetric" onchange="renderCharts()">
+      <option value="foulesPerGame">Metric: Fouls/Game</option>
+      <option value="yellowPerGame">Metric: Yellows/Game</option>
+      <option value="redPerGame">Metric: Reds/Game</option>
+      <option value="foulToYellowRatio">Metric: Foul→Yellow Ratio</option>
+    </select>
+  </div>
+  <div class="chart-grid">
+    <div class="chart-card">
+      <div class="chart-title">Top Referees — Selected Metric</div>
+      <div class="chart-wrap"><canvas id="refBarChart" height="300"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Home vs Away Fouls Bias (per referee)</div>
+      <div class="chart-wrap"><canvas id="homeAwayChart" height="300"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Foul → Yellow Card Conversion Rate</div>
+      <div class="chart-wrap"><canvas id="foulYellowChart" height="300"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Top Teams by Fouls Conceded/G</div>
+      <div class="chart-wrap"><canvas id="teamFoulChart" height="300"></canvas></div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<script>
+
+// ─── Season Filter ────────────────────────────────────────────────────────────
+let activeSeasons = new Set(); // empty = all seasons
+
+function toggleAllSeasons(btn) {
+  activeSeasons.clear();
+  document.querySelectorAll('.season-chip[data-season]').forEach(c => c.classList.remove('active'));
+  document.querySelector('.season-chip-all').classList.add('active');
+  updateFilterInfo();
+  if (appData) reloadData();
+}
+
+function toggleSeason(btn) {
+  const s = parseInt(btn.dataset.season);
+  if (activeSeasons.has(s)) {
+    activeSeasons.delete(s);
+    btn.classList.remove('active');
+  } else {
+    activeSeasons.add(s);
+    btn.classList.add('active');
+  }
+  // If none selected, treat as "all"
+  const allBtn = document.querySelector('.season-chip-all');
+  if (activeSeasons.size === 0) {
+    allBtn.classList.add('active');
+  } else {
+    allBtn.classList.remove('active');
+  }
+  updateFilterInfo();
+  if (appData) reloadData();
+}
+
+function updateFilterInfo() {
+  const el = document.getElementById('filterInfo');
+  if (!appData) { el.textContent = ''; return; }
+  const label = activeSeasons.size === 0
+    ? `all ${appData.matchCount} matches`
+    : `${appData.matchCount} matches`;
+  el.textContent = label;
+}
+
+function getSeasonParam() {
+  if (activeSeasons.size === 0) return '';
+  return '?seasons=' + [...activeSeasons].join(',');
+}
+
+async function reloadData() {
+  const res = await fetch('/api/data' + getSeasonParam());
+  if (!res.ok) return;
+  appData = await res.json();
+  renderAll();
+  updateFilterInfo();
+  updateFilterInfo();
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let appData = null;
+let refSortKey = 'games';
+let refSortAsc = false;
+let teamSortKey = 'name';
+let teamSortAsc = true;
+let refFilter = '';
+let teamFilter = '';
+let selectedRef = null;
+let selectedTeam = null;
+let charts = {};
+
+// ─── Polling ─────────────────────────────────────────────────────────────────
+async function pollStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    updateStatusUI(s);
+    if (s.status === 'ready' && !appData) {
+      await loadData();
+    } else if (s.status === 'loading' || s.status === 'idle') {
+      setTimeout(pollStatus, 2000);
+    }
+  } catch(e) {
+    setTimeout(pollStatus, 3000);
+  }
+}
+
+function updateStatusUI(s) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const bar = document.getElementById('progressBar');
+  const loadTxt = document.getElementById('loadingText');
+
+  dot.className = 'status-dot ' + s.status;
+
+  if (s.status === 'loading') {
+    const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0;
+    bar.style.width = pct + '%';
+    loadTxt.textContent = `${s.progress} / ${s.total} matches processed…`;
+    text.textContent = `loading ${pct}%`;
+    document.getElementById('loadingScreen').style.display = 'flex';
+  } else if (s.status === 'ready') {
+    const d = new Date(s.lastUpdated * 1000);
+    text.textContent = `${s.matchCount} matches · updated ${d.toLocaleDateString()}`;
+    document.getElementById('loadingScreen').style.display = 'none';
+  } else if (s.status === 'error') {
+    text.textContent = 'error — check console';
+    document.getElementById('loadingScreen').innerHTML = `<div class="loading-title" style="color:var(--accent2)">Error Loading Data</div><div class="loading-text">${s.error}</div>`;
+  } else {
+    text.textContent = 'idle';
+  }
+}
+
+async function loadData() {
+  const res = await fetch('/api/data');
+  if (!res.ok) return;
+  appData = await res.json();
+  renderAll();
+  updateFilterInfo();
+}
+
+
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    const tabs = ['refs','teams','refteam','charts'];
+    b.classList.toggle('active', tabs[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'charts' && appData) renderCharts();
+}
+
+// ─── Render All ──────────────────────────────────────────────────────────────
+function renderAll() {
+  renderRefSummary();
+  renderRefTable();
+  renderTeamTable();
+  populateTeamRefSelect();
+  renderTeamRefBreakdown();
+  renderRefSidebar();
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function fmt(v, decimals=2) { return typeof v === 'number' ? v.toFixed(decimals) : v; }
+
+
+function sampleBadge(games, threshold=5) {
+  if (games < threshold) return `<span class="sample-warning" title="Low sample size">n=${games}</span>`;
+  return '';
+}
+
+function colorPill(val, avg, type='fouls') {
+  const ratio = avg > 0 ? val / avg : 1;
+  if (type === 'points') {
+    if (ratio > 1.1) return 'pill-green';
+    if (ratio < 0.9) return 'pill-red';
+    return 'pill-neutral';
+  }
+  // For cards/fouls — higher = worse
+  if (ratio > 1.15) return 'pill-red';
+  if (ratio < 0.85) return 'pill-green';
+  return 'pill-neutral';
+}
+
+// ─── Ref Summary Cards ────────────────────────────────────────────────────────
+function renderRefSummary() {
+  const refs = appData.refs;
+  const avgFouls = refs.reduce((a,r)=>a+r.foulesPerGame,0)/refs.length;
+  const avgYellow = refs.reduce((a,r)=>a+r.yellowPerGame,0)/refs.length;
+  const avgRed = refs.reduce((a,r)=>a+r.redPerGame,0)/refs.length;
+
+  document.getElementById('refSummaryCards').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total Matches</div><div class="stat-value">${appData.matchCount}</div></div>
+    <div class="stat-card"><div class="stat-label">Referees</div><div class="stat-value">${refs.length}</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Fouls/Game</div><div class="stat-value">${fmt(avgFouls)}</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Yellows/Game</div><div class="stat-value">${fmt(avgYellow)}</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Reds/Game</div><div class="stat-value" style="color:var(--accent2)">${fmt(avgRed)}</div></div>
+  `;
+}
+
+// ─── Ref Table ────────────────────────────────────────────────────────────────
+function sortRefTable(key) {
+  if (refSortKey === key) refSortAsc = !refSortAsc;
+  else { refSortKey = key; refSortAsc = false; }
+  renderRefTable();
+}
+function filterRefTable(q) { refFilter = q.toLowerCase(); renderRefTable(); }
+
+function renderRefTable() {
+  if (!appData) return;
+  let data = [...appData.refs].filter(r => r.name.toLowerCase().includes(refFilter));
+  data.sort((a,b) => {
+    const v = (refSortAsc ? 1 : -1);
+    if (typeof a[refSortKey] === 'string') return v * a[refSortKey].localeCompare(b[refSortKey]);
+    return v * (a[refSortKey] - b[refSortKey]);
+  });
+
+  const avgFouls = appData.refs.reduce((a,r)=>a+r.foulesPerGame,0)/appData.refs.length;
+  const avgYellow = appData.refs.reduce((a,r)=>a+r.yellowPerGame,0)/appData.refs.length;
+  const avgRed = appData.refs.reduce((a,r)=>a+r.redPerGame,0)/appData.refs.length;
+
+  document.getElementById('refTbody').innerHTML = data.map(r => `
+    <tr>
+      <td class="name-cell">${r.name}${sampleBadge(r.games, 10)}</td>
+      <td class="mono">${r.games}</td>
+      <td><span class="pill ${colorPill(r.foulesPerGame, avgFouls)}">${fmt(r.foulesPerGame)}</span></td>
+      <td><span class="pill ${colorPill(r.yellowPerGame, avgYellow)}">${fmt(r.yellowPerGame)}</span></td>
+      <td><span class="pill ${colorPill(r.redPerGame, avgRed)}">${fmt(r.redPerGame)}</span></td>
+      <td class="mono">${fmt(r.foulToYellowRatio)}</td>
+      <td class="mono">${fmt(r.homeFoulsPerGame)}</td>
+      <td class="mono">${fmt(r.awayFoulsPerGame)}</td>
+      <td class="mono">${fmt(r.homeYellowPerGame)}</td>
+      <td class="mono">${fmt(r.awayYellowPerGame)}</td>
+    </tr>
+  `).join('');
+}
+
+// ─── Team Table ───────────────────────────────────────────────────────────────
+function sortTeamTable(key) {
+  if (teamSortKey === key) teamSortAsc = !teamSortAsc;
+  else { teamSortKey = key; teamSortAsc = key === 'name'; }
+  renderTeamTable();
+}
+function filterTeamTable(q) { teamFilter = q.toLowerCase(); renderTeamTable(); }
+
+function renderTeamTable() {
+  if (!appData) return;
+  let data = [...appData.teams].filter(t => t.name.toLowerCase().includes(teamFilter));
+  data.sort((a,b) => {
+    const v = (teamSortAsc ? 1 : -1);
+    if (typeof a[teamSortKey] === 'string') return v * a[teamSortKey].localeCompare(b[teamSortKey]);
+    return v * (a[teamSortKey] - b[teamSortKey]);
+  });
+
+  const avgPts = appData.teams.reduce((a,t)=>a+t.pointsPerGame,0)/appData.teams.length;
+  const avgFouls = appData.teams.reduce((a,t)=>a+t.foulesPerGame,0)/appData.teams.length;
+
+  document.getElementById('teamTbody').innerHTML = data.map(t => `
+    <tr>
+      <td class="name-cell">${t.name}</td>
+      <td class="mono">${t.games}</td>
+      <td><span class="pill ${colorPill(t.pointsPerGame, avgPts, 'points')}">${fmt(t.pointsPerGame)}</span></td>
+      <td><span class="pill ${colorPill(t.foulesPerGame, avgFouls)}">${fmt(t.foulesPerGame)}</span></td>
+      <td class="mono">${fmt(t.yellowPerGame)}</td>
+      <td class="mono">${fmt(t.redPerGame)}</td>
+    </tr>
+  `).join('');
+}
+
+// ─── Team × Ref Breakdown ────────────────────────────────────────────────────
+function populateTeamRefSelect() {
+  const sel = document.getElementById('teamRefSelect');
+  sel.innerHTML = appData.teams.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+}
+
+function renderTeamRefBreakdown() {
+  if (!appData) return;
+  const teamName = document.getElementById('teamRefSelect').value;
+  const metric = document.getElementById('teamRefMetric').value;
+  const team = appData.teams.find(t => t.name === teamName);
+  if (!team) return;
+
+  const teamAvg = team[metric];
+  const refData = Object.entries(team.refBreakdown || {});
+  if (!refData.length) {
+    document.getElementById('teamRefBreakdownContainer').innerHTML = '<div class="empty-state">Not enough data</div>';
+    return;
+  }
+
+  // Sort by delta
+  refData.sort((a,b) => b[1][metric] - a[1][metric]);
+
+  const maxVal = Math.max(...refData.map(([,d]) => d[metric]), teamAvg * 1.5);
+
+  const isPositive = metric === 'pointsPerGame';
+
+  const rows = refData.map(([ref, d]) => {
+    const val = d[metric];
+    const delta = val - teamAvg;
+    const pct = Math.round(val / maxVal * 100);
+    const deltaStr = (delta >= 0 ? '+' : '') + fmt(delta);
+    let deltaClass = 'delta-neu';
+    if (Math.abs(delta) > 0.05) {
+      if (isPositive) deltaClass = delta > 0 ? 'delta-pos' : 'delta-neg';
+      else deltaClass = delta > 0 ? 'delta-neg' : 'delta-pos';
+    }
+    const barColor = deltaClass === 'delta-pos' ? 'var(--green)' : deltaClass === 'delta-neg' ? 'var(--accent2)' : 'var(--accent3)';
+
+    return `
+      <tr>
+        <td class="name-cell" style="width:180px">${ref}${sampleBadge(d.games, 3)}</td>
+        <td class="mono" style="width:50px">${d.games}g</td>
+        <td style="min-width:200px">
+          <div class="bar-wrap">
+            <div class="bar-bg">
+              <div class="bar-fill" style="width:${pct}%;background:${barColor}"></div>
+            </div>
+            <div class="bar-label" style="color:${barColor}">${fmt(val)}</div>
+          </div>
+        </td>
+        <td class="mono ${deltaClass}">${deltaStr}</td>
+      </tr>
+    `;
+  });
+
+  // Average line row
+  const avgPct = Math.round(teamAvg / maxVal * 100);
+
+  document.getElementById('teamRefBreakdownContainer').innerHTML = `
+    <div class="table-wrap">
+      <table class="bias-table">
+        <thead>
+          <tr>
+            <th>Referee</th>
+            <th>Games</th>
+            <th>${metric} <span style="color:var(--muted);font-weight:400">(avg: ${fmt(teamAvg)})</span></th>
+            <th>vs Avg</th>
+          </tr>
+        </thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ─── Ref Sidebar + Detail ─────────────────────────────────────────────────────
+function renderRefSidebar() {
+  const sorted = [...appData.refs].sort((a,b) => b.games - a.games);
+  document.getElementById('refSidebar').innerHTML = sorted.map(r => `
+    <div class="sidebar-item${selectedRef === r.name ? ' active' : ''}" onclick="selectRef('${r.name.replace(/'/g,"\\'")}')">
+      <span>${r.name}</span>
+      <span class="games-badge">${r.games}g</span>
+    </div>
+  `).join('');
+}
+
+function selectRef(name) {
+  selectedRef = name;
+  renderRefSidebar();
+  renderRefDetail();
+}
+
+function renderRefDetail() {
+  if (!selectedRef || !appData) return;
+  const ref = appData.refs.find(r => r.name === selectedRef);
+  if (!ref) return;
+
+  // Get all ref×team records for this ref
+  const records = appData.refTeam.filter(r => r.referee === selectedRef);
+  records.sort((a,b) => b.games - a.games);
+
+  // Global averages
+  const allRecs = appData.refTeam;
+  const avgFouls = allRecs.reduce((a,r)=>a+r.foulesPerGame,0)/allRecs.length;
+  const avgYellow = allRecs.reduce((a,r)=>a+r.yellowPerGame,0)/allRecs.length;
+  const avgPts = allRecs.reduce((a,r)=>a+r.pointsPerGame,0)/allRecs.length;
+
+  const maxFouls = Math.max(...records.map(r=>r.foulesPerGame), avgFouls*1.3);
+  const maxYellow = Math.max(...records.map(r=>r.yellowPerGame), avgYellow*1.3);
+  const maxPts = Math.max(...records.map(r=>r.pointsPerGame), avgPts*1.3);
+
+  function bar(val, max, avg) {
+    const pct = Math.round(val/max*100);
+    const delta = val - avg;
+    const isHigh = delta > avg * 0.1;
+    const isLow = delta < -avg * 0.1;
+    const col = isHigh ? 'var(--accent2)' : isLow ? 'var(--green)' : 'var(--accent3)';
+    return `<div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div><div class="bar-label" style="color:${col}">${fmt(val)}</div></div>`;
+  }
+
+  function ptsBar(val, max, avg) {
+    const pct = Math.round(val/max*100);
+    const delta = val - avg;
+    const isHigh = delta > 0.05;
+    const isLow = delta < -0.05;
+    const col = isHigh ? 'var(--green)' : isLow ? 'var(--accent2)' : 'var(--accent3)';
+    return `<div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div><div class="bar-label" style="color:${col}">${fmt(val)}</div></div>`;
+  }
+
+  const rows = records.map(r => `
+    <tr>
+      <td class="name-cell">${r.team}${sampleBadge(r.games, 3)}</td>
+      <td class="mono">${r.games}</td>
+      <td style="min-width:140px">${bar(r.foulesPerGame, maxFouls, avgFouls)}</td>
+      <td style="min-width:120px">${bar(r.yellowPerGame, maxYellow, avgYellow)}</td>
+      <td style="min-width:120px">${ptsBar(r.pointsPerGame, Math.max(3, maxPts), avgPts)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('refDetailPanel').innerHTML = `
+    <div class="detail-ref-name">${ref.name}</div>
+    <div class="detail-meta">${ref.games} games · ${fmt(ref.foulesPerGame)} fouls/g · ${fmt(ref.yellowPerGame)} yellows/g · ${fmt(ref.redPerGame)} reds/g</div>
+
+    <div class="stats-row" style="margin-bottom:1.5rem">
+      <div class="stat-card"><div class="stat-label">Home Fouls/G</div><div class="stat-value" style="font-size:1.5rem">${fmt(ref.homeFoulsPerGame)}</div></div>
+      <div class="stat-card"><div class="stat-label">Away Fouls/G</div><div class="stat-value" style="font-size:1.5rem">${fmt(ref.awayFoulsPerGame)}</div></div>
+      <div class="stat-card"><div class="stat-label">Home Yellow/G</div><div class="stat-value" style="font-size:1.5rem">${fmt(ref.homeYellowPerGame)}</div></div>
+      <div class="stat-card"><div class="stat-label">Away Yellow/G</div><div class="stat-value" style="font-size:1.5rem">${fmt(ref.awayYellowPerGame)}</div></div>
+      <div class="stat-card"><div class="stat-label">Foul→Yellow</div><div class="stat-value" style="font-size:1.5rem">${fmt(ref.foulToYellowRatio)}</div></div>
+    </div>
+
+    <div class="section-header"><span class="section-title">Per-Team Stats</span><div class="section-line"></div></div>
+    <div class="table-wrap">
+      <table class="bias-table">
+        <thead>
+          <tr>
+            <th>Team</th>
+            <th>Games</th>
+            <th>Fouls/G <span style="font-weight:400;color:var(--muted)">(avg: ${fmt(avgFouls)})</span></th>
+            <th>Yellows/G <span style="font-weight:400;color:var(--muted)">(avg: ${fmt(avgYellow)})</span></th>
+            <th>Pts/G <span style="font-weight:400;color:var(--muted)">(avg: ${fmt(avgPts)})</span></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+
+
+// ─── Charts ───────────────────────────────────────────────────────────────────
+const CHART_COLORS = {
+  accent: '#e8ff47',
+  accent2: '#ff4d6d',
+  accent3: '#47c8ff',
+  green: '#4ade80',
+  orange: '#fb923c',
+  muted: '#6b7280',
+};
+
+Chart.defaults.color = '#6b7280';
+Chart.defaults.borderColor = '#2a2d3a';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function renderCharts() {
+  if (!appData) return;
+  const metric = document.getElementById('chartMetric').value;
+  const refs = [...appData.refs].filter(r => r.games >= 10).sort((a,b) => b[metric] - a[metric]).slice(0,15);
+
+  // ─ Ref bar chart ─
+  destroyChart('refBar');
+  charts['refBar'] = new Chart(document.getElementById('refBarChart'), {
+    type: 'bar',
+    data: {
+      labels: refs.map(r => r.name.split(' ').pop()),
+      datasets: [{
+        data: refs.map(r => r[metric]),
+        backgroundColor: refs.map(r => r[metric] > refs.reduce((a,x)=>a+x[metric],0)/refs.length * 1.1 ? CHART_COLORS.accent2 + 'cc' : CHART_COLORS.accent3 + 'cc'),
+        borderWidth: 0,
+        borderRadius: 3,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { font: { size: 9 } } },
+        y: { grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
+    }
+  });
+
+  // ─ Home vs Away fouls ─
+  const refsHA = [...appData.refs].filter(r => r.games >= 10).sort((a,b) => (b.homeFoulsPerGame - b.awayFoulsPerGame) - (a.homeFoulsPerGame - a.awayFoulsPerGame)).slice(0, 12);
+  destroyChart('homeAway');
+  charts['homeAway'] = new Chart(document.getElementById('homeAwayChart'), {
+    type: 'bar',
+    data: {
+      labels: refsHA.map(r => r.name.split(' ').pop()),
+      datasets: [
+        { label: 'Home', data: refsHA.map(r => r.homeFoulsPerGame), backgroundColor: CHART_COLORS.accent3 + 'aa', borderWidth:0, borderRadius:2 },
+        { label: 'Away', data: refsHA.map(r => r.awayFoulsPerGame), backgroundColor: CHART_COLORS.accent2 + 'aa', borderWidth:0, borderRadius:2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 10, font: { size: 10 } } } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { font: { size: 9 } } },
+        y: { grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
+    }
+  });
+
+  // ─ Foul to yellow scatter ─
+  const refsScatter = appData.refs.filter(r => r.games >= 10);
+  destroyChart('foulYellow');
+  charts['foulYellow'] = new Chart(document.getElementById('foulYellowChart'), {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        data: refsScatter.map(r => ({ x: r.foulesPerGame, y: r.yellowPerGame, name: r.name })),
+        backgroundColor: CHART_COLORS.accent + 'bb',
+        borderColor: 'transparent',
+        pointRadius: 5,
+        pointHoverRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.raw.name}: fouls ${fmt(ctx.raw.x)} | yellows ${fmt(ctx.raw.y)}`
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Fouls / Game', color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { title: { display: true, text: 'Yellows / Game', color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      }
+    }
+  });
+
+  // ─ Teams fouls ─
+  const teams = [...appData.teams].sort((a,b) => b.foulesPerGame - a.foulesPerGame).slice(0, 15);
+  destroyChart('teamFoul');
+  charts['teamFoul'] = new Chart(document.getElementById('teamFoulChart'), {
+    type: 'bar',
+    data: {
+      labels: teams.map(t => t.name),
+      datasets: [{
+        data: teams.map(t => t.foulesPerGame),
+        backgroundColor: teams.map(t => t.foulesPerGame > 11 ? CHART_COLORS.accent2 + 'cc' : CHART_COLORS.green + 'cc'),
+        borderWidth: 0, borderRadius: 3,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { font: { size: 9 } } },
+      }
+    }
+  });
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+pollStatus();
+// If data was already ready, poll again in case we missed it
+setTimeout(async () => {
+  if (!appData) {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    if (s.status === 'ready') await loadData();
+  }
+}, 500);
+</script>
+</body>
+</html>

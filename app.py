@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
 WhistleWatch - Premier League Referee Bias Analyzer
-Run: python3 app.py
-Then open: http://localhost:8080
+Run: python3 app.py  →  open http://localhost:8080
 
-Cron job (once daily): restart this process — it will auto-sync any new matches.
+Startup flow:
+  1. Load pre-computed analytics from Firestore (instant)
+  2. In background: check PL API for new matches, fetch any missing ones,
+     recompute analytics, update Firestore
+  3. Frontend gets served immediately from step 1 while step 2 runs quietly
 """
 
 import json
@@ -31,18 +34,19 @@ HEADERS = {
 }
 
 COMPETITION_ID = 8
-# All seasons to track. Add future seasons here each year.
-# On startup, completed seasons are skipped instantly if already in DB.
-# Only seasons with missing matches trigger API calls.
 ALL_SEASONS    = [2022, 2023, 2024, 2025]
 FETCH_WORKERS  = 20
 
-# Minimum game thresholds for inclusion in analytics
-MIN_REF_GAMES      = 3   # ref must have officiated at least this many games overall
-MIN_REF_TEAM_GAMES = 1   # ref×team pair must have at least this many games
-MIN_TEAM_GAMES     = 1   # team must have at least this many games
-FIREBASE_KEY   = "firebase_key.json"
-PROJECT_ID     = "whistle-watch"
+MIN_REF_GAMES      = 3
+MIN_REF_TEAM_GAMES = 1
+MIN_TEAM_GAMES     = 1
+
+FIREBASE_KEY = "firebase_key.json"
+PROJECT_ID   = "whistle-watch"
+
+# Firestore document IDs for stored analytics
+ANALYTICS_DOC   = "analytics/computed"      # full all-seasons analytics
+ANALYTICS_PREFIX = "analytics/season_"      # per-season: analytics/season_2024
 
 TEAM_MAPPING = {
     3: "Arsenal", 7: "Aston Villa", 91: "Bournemouth", 94: "Brentford",
@@ -54,15 +58,17 @@ TEAM_MAPPING = {
     57: "Watford", 20: "Southampton", 102: "Luton", 40: "Ipswich"
 }
 
-# ─── Data Store ───────────────────────────────────────────────────────────────
+# ─── In-Memory Cache ──────────────────────────────────────────────────────────
+# We store pre-computed analytics per season + combined, not raw matches.
 
 cache = {
-    "matches": [],
+    # analytics[None] = all seasons combined
+    # analytics[2022] = just 22/23, etc.
+    "analytics": {},
     "last_updated": None,
-    "status": "idle",
-    "progress": 0,
-    "total": 0,
-    "error": None
+    "status": "idle",   # idle | ready | syncing | error
+    "error": None,
+    "matchCount": 0,
 }
 
 db = None
@@ -73,49 +79,44 @@ def init_firebase():
     global db
     if not os.path.exists(FIREBASE_KEY):
         raise FileNotFoundError(
-            f"'{FIREBASE_KEY}' not found. Download your service account key from "
-            f"Firebase console → Project Settings → Service Accounts and save it as '{FIREBASE_KEY}'."
+            f"'{FIREBASE_KEY}' not found. Download from Firebase console → "
+            f"Project Settings → Service Accounts → Generate new private key."
         )
     cred = credentials.Certificate(FIREBASE_KEY)
     firebase_admin.initialize_app(cred, {"projectId": PROJECT_ID})
     db = firestore.client()
     print("  Firebase connected!")
 
+# ─── Stored Analytics ─────────────────────────────────────────────────────────
 
-def backfill_seasons():
-    """One-time migration: add season field to existing Firestore docs that lack it."""
-    print("  Checking for docs missing season field...")
-    # Build matchId -> season map from PL API id ranges
-    # We'll query Firestore for docs where season is missing and update them in batches
-    needs_update = []
-    for doc in db.collection("matches").stream():
-        d = doc.to_dict()
-        if d.get("season") is None:
-            needs_update.append(doc.id)
-
-    if not needs_update:
-        print("  All docs have season field — no migration needed")
-        return
-
-    print(f"  Backfilling season on {len(needs_update)} docs...")
-    # Re-fetch season->ids mapping to know which matchId belongs to which season
-    season_map = {}
+def load_analytics_from_firestore():
+    """Load pre-computed analytics from Firestore. Returns dict keyed by season (or None for all)."""
+    result = {}
+    # All-seasons combined
+    doc = db.document(ANALYTICS_DOC).get()
+    if doc.exists:
+        result[None] = doc.to_dict()
+        print(f"  Loaded combined analytics from Firestore ({result[None].get('matchCount',0)} matches)")
+    # Per-season
     for season in ALL_SEASONS:
-        ids = fetch_match_ids_for_season(season)
-        for mid in ids:
-            season_map[str(mid)] = season
+        doc = db.document(f"analytics/season_{season}").get()
+        if doc.exists:
+            result[season] = doc.to_dict()
+            print(f"  Loaded season {season} analytics ({result[season].get('matchCount',0)} matches)")
+    return result
 
-    batch_count = 0
-    for i in range(0, len(needs_update), 400):
-        batch = db.batch()
-        for doc_id in needs_update[i:i+400]:
-            season = season_map.get(doc_id)
-            if season:
-                ref = db.collection("matches").document(doc_id)
-                batch.update(ref, {"season": season})
-        batch.commit()
-        batch_count += 1
-    print(f"  Backfill complete ({batch_count} batches)")
+def save_analytics_to_firestore(analytics_by_season):
+    """Store pre-computed analytics back to Firestore."""
+    # Save combined
+    if None in analytics_by_season:
+        db.document(ANALYTICS_DOC).set(analytics_by_season[None])
+    # Save per-season
+    for season, data in analytics_by_season.items():
+        if season is not None:
+            db.document(f"analytics/season_{season}").set(data)
+    print("  Analytics saved to Firestore")
+
+# ─── Match Storage ────────────────────────────────────────────────────────────
 
 def get_stored_match_ids():
     docs = db.collection("matches").select(["matchId"]).stream()
@@ -130,13 +131,16 @@ def save_matches_to_firestore(matches):
             ref = db.collection("matches").document(str(m["matchId"]))
             batch.set(ref, m)
         batch.commit()
-        print(f"    Saved {min(i+400, len(matches))}/{len(matches)} to Firestore")
+    print(f"  Saved {len(matches)} matches to Firestore")
 
-def load_all_from_firestore():
-    print("  Loading all matches from Firestore...")
-    matches = [doc.to_dict() for doc in db.collection("matches").stream()]
-    print(f"  Loaded {len(matches)} matches")
-    return matches
+def load_matches_from_firestore(seasons=None):
+    """Load raw matches from Firestore, optionally filtered by season list."""
+    if seasons:
+        # Firestore 'in' queries support up to 10 values
+        docs = db.collection("matches").where("season", "in", seasons).stream()
+    else:
+        docs = db.collection("matches").stream()
+    return [doc.to_dict() for doc in docs]
 
 # ─── PL API ───────────────────────────────────────────────────────────────────
 
@@ -161,8 +165,7 @@ def fetch_match_ids_for_season(season):
             ids.extend(mw_ids)
             print(f"    MW{mw:02d}: {len(mw_ids)} matches")
         except HTTPError as e:
-            if e.code in (400, 404):
-                break
+            if e.code in (400, 404): break
             print(f"    MW{mw:02d}: HTTP {e.code}")
         except Exception as e:
             print(f"    MW{mw:02d}: ERROR — {e}")
@@ -211,9 +214,7 @@ def fetch_match_detail(match_id, season=None):
         def pts(r): return 3 if r == "win" else (1 if r == "draw" else 0)
 
         return {
-            "matchId":  match_id,
-            "season":   season,
-            "referee":  referee,
+            "matchId": match_id, "season": season, "referee": referee,
             "homeTeam": {
                 "teamId": tid(home), "teamName": TEAM_MAPPING.get(tid(home), f"Team {tid(home)}"),
                 "goals": hg, "redCards": stat(home,"totalRedCard"),
@@ -243,67 +244,20 @@ def fetch_and_store_missing(match_ids, season, label=""):
         for future in as_completed(futures):
             result = future.result()
             with lock:
-                if result:
-                    results.append(result)
-                else:
-                    failed[0] += 1
+                if result: results.append(result)
+                else: failed[0] += 1
                 done = len(results) + failed[0]
                 if done % 100 == 0:
                     print(f"    {done}/{len(match_ids)} ({len(results)} ok)")
 
-    print(f"  Done: {len(results)} fetched, {failed[0]} failed")
+    print(f"  Fetched {len(results)}/{len(match_ids)}")
     save_matches_to_firestore(results)
     return results
 
-# ─── Main Data Load ───────────────────────────────────────────────────────────
+# ─── Analytics Computation ────────────────────────────────────────────────────
 
-def load_data():
-    global cache
-    cache["status"] = "loading"
-    cache["matches"] = []
-    cache["error"] = None
-
-    try:
-        print("\n  Checking Firestore...")
-        backfill_seasons()
-        stored_ids = get_stored_match_ids()
-        print(f"  {len(stored_ids)} matches already in DB")
-
-        for season in ALL_SEASONS:
-            print(f"\n  Season {season}...")
-            season_ids = fetch_match_ids_for_season(season)
-            if not season_ids:
-                print(f"  No matches found for {season} — season may not have started yet")
-                continue
-            missing = [mid for mid in season_ids if str(mid) not in stored_ids]
-            if not missing:
-                print(f"  All {len(season_ids)} matches already in DB — skipping")
-            else:
-                print(f"  {len(missing)} new matches to fetch")
-                fetched = fetch_and_store_missing(missing, season, f"(season {season})")
-                stored_ids.update(str(m["matchId"]) for m in fetched)
-
-        all_matches = load_all_from_firestore()
-        cache["matches"]      = all_matches
-        cache["last_updated"] = time.time()
-        cache["progress"]     = len(all_matches)
-        cache["total"]        = len(all_matches)
-        cache["status"]       = "ready"
-        print(f"\n  Ready! {len(all_matches)} matches loaded.")
-
-    except Exception as e:
-        import traceback
-        print(f"\n  Load failed: {e}")
-        traceback.print_exc()
-        cache["status"] = "error"
-        cache["error"]  = str(e)
-
-# ─── Analytics ────────────────────────────────────────────────────────────────
-
-def compute_analytics(seasons=None):
-    all_matches = cache["matches"]
-    matches = [m for m in all_matches if seasons is None or m.get("season") in seasons]
-
+def compute_analytics_from_matches(matches):
+    """Compute analytics dict from a list of match objects."""
     refs = {}
     for m in matches:
         r = m["referee"]
@@ -396,10 +350,142 @@ def compute_analytics(seasons=None):
         "teams":       sorted(team_list, key=lambda x: x["name"]),
         "refTeam":     ref_team_list,
         "matchCount":  len(matches),
-        "lastUpdated": cache["last_updated"]
+        "lastUpdated": time.time()
     }
 
-# ─── HTTP Server ──────────────────────────────────────────────────────────────
+def rebuild_all_analytics():
+    """Load all matches from Firestore, compute analytics for each season + combined, store back."""
+    print("  Computing analytics...")
+
+    # Load all raw matches once
+    all_matches = load_matches_from_firestore()
+    print(f"  Loaded {len(all_matches)} total matches for computation")
+
+    analytics = {}
+
+    # Combined (all seasons)
+    analytics[None] = compute_analytics_from_matches(all_matches)
+
+    # Per season
+    for season in ALL_SEASONS:
+        season_matches = [m for m in all_matches if m.get("season") == season]
+        if season_matches:
+            analytics[season] = compute_analytics_from_matches(season_matches)
+            print(f"  Season {season}: {len(season_matches)} matches → analytics computed")
+
+    # Firestore can't have None as a key — convert for storage
+    firestore_data = {}
+    if None in analytics:
+        firestore_data["combined"] = analytics[None]
+    for s, data in analytics.items():
+        if s is not None:
+            firestore_data[f"season_{s}"] = data
+
+    # Save as single document to minimise reads on next startup
+    db.document("analytics/precomputed").set(firestore_data)
+    print("  Analytics saved to Firestore (analytics/precomputed)")
+    return analytics
+
+# ─── Main Load ────────────────────────────────────────────────────────────────
+
+def load_data():
+    global cache
+    cache["error"] = None
+
+    try:
+        # ── Step 1: Load pre-computed analytics instantly ──
+        print("\n  Loading pre-computed analytics from Firestore...")
+        doc = db.document("analytics/precomputed").get()
+        if doc.exists:
+            stored = doc.to_dict()
+            analytics = {}
+            if "combined" in stored:
+                analytics[None] = stored["combined"]
+            for season in ALL_SEASONS:
+                key = f"season_{season}"
+                if key in stored:
+                    analytics[season] = stored[key]
+            cache["analytics"]    = analytics
+            cache["last_updated"] = analytics.get(None, {}).get("lastUpdated")
+            cache["matchCount"]   = analytics.get(None, {}).get("matchCount", 0)
+            cache["status"]       = "ready"
+            print(f"  Ready immediately! {cache['matchCount']} matches in analytics.")
+        else:
+            print("  No pre-computed analytics found — will compute after sync.")
+            cache["status"] = "loading"
+
+        # ── Step 2: Background sync — check for new matches ──
+        threading.Thread(target=sync_new_matches, daemon=True).start()
+
+    except Exception as e:
+        import traceback
+        print(f"\n  Load failed: {e}")
+        traceback.print_exc()
+        cache["status"] = "error"
+        cache["error"]  = str(e)
+
+def sync_new_matches():
+    """Background: check PL API for new matches, fetch missing ones, recompute analytics."""
+    global cache
+    try:
+        print("\n  [sync] Checking for new matches...")
+        stored_ids = get_stored_match_ids()
+        print(f"  [sync] {len(stored_ids)} matches in DB")
+
+        found_new = False
+        for season in ALL_SEASONS:
+            print(f"\n  [sync] Season {season}...")
+            season_ids = fetch_match_ids_for_season(season)
+            if not season_ids:
+                print(f"  [sync] No matches yet for {season}")
+                continue
+            missing = [mid for mid in season_ids if str(mid) not in stored_ids]
+            if not missing:
+                print(f"  [sync] All {len(season_ids)} matches already in DB")
+            else:
+                print(f"  [sync] {len(missing)} new matches to fetch")
+                fetched = fetch_and_store_missing(missing, season, f"(season {season})")
+                stored_ids.update(str(m["matchId"]) for m in fetched)
+                if fetched:
+                    found_new = True
+
+        if found_new or cache["status"] != "ready":
+            print("\n  [sync] New matches found — recomputing analytics...")
+            analytics = rebuild_all_analytics()
+            cache["analytics"]    = analytics
+            cache["last_updated"] = time.time()
+            cache["matchCount"]   = analytics.get(None, {}).get("matchCount", 0)
+            cache["status"]       = "ready"
+            print(f"  [sync] Done! {cache['matchCount']} total matches.")
+        else:
+            print("\n  [sync] No new matches — analytics are up to date.")
+            cache["status"] = "ready"
+
+    except Exception as e:
+        import traceback
+        print(f"\n  [sync] Error: {e}")
+        traceback.print_exc()
+        # Don't overwrite status if we already have good data
+        if cache["status"] != "ready":
+            cache["status"] = "error"
+            cache["error"]  = str(e)
+
+# ─── Request Handler ──────────────────────────────────────────────────────────
+
+def get_analytics(seasons=None):
+    """Return analytics for the requested seasons from in-memory cache."""
+    a = cache["analytics"]
+    if not seasons:
+        return a.get(None) or {}
+
+    if len(seasons) == 1:
+        return a.get(seasons[0]) or {}
+
+    # Multiple seasons selected — merge them on the fly
+    # Collect all raw match data for just those seasons from Firestore
+    # (rare case, acceptable to be slightly slower)
+    matches = load_matches_from_firestore(seasons=list(seasons))
+    return compute_analytics_from_matches(matches)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
@@ -416,7 +502,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(self.path)
-        path = parsed.path
+        path   = parsed.path
         params = parse_qs(parsed.query)
 
         if path in ("/", "/index.html"):
@@ -431,22 +517,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "index.html not found"}, 404)
 
         elif path == "/api/status":
-            self.send_json({"status": cache["status"], "progress": cache["progress"],
-                            "total": cache["total"], "lastUpdated": cache["last_updated"],
-                            "matchCount": len(cache["matches"]), "error": cache["error"]})
+            self.send_json({
+                "status":      cache["status"],
+                "matchCount":  cache["matchCount"],
+                "lastUpdated": cache["last_updated"],
+                "error":       cache["error"]
+            })
 
         elif path == "/api/data":
-            if cache["status"] != "ready":
+            if not cache["analytics"]:
                 self.send_json({"error": f"Data not ready (status: {cache['status']})"}, 503)
             else:
                 seasons_param = params.get("seasons", [None])[0]
                 selected = [int(s) for s in seasons_param.split(",")] if seasons_param else None
-                self.send_json(compute_analytics(selected))
+                self.send_json(get_analytics(selected))
 
         elif path == "/api/debug":
-            self.send_json({"status": cache["status"], "matchCount": len(cache["matches"]),
-                            "error": cache["error"],
-                            "sampleMatch": cache["matches"][0] if cache["matches"] else None})
+            self.send_json({
+                "status":     cache["status"],
+                "matchCount": cache["matchCount"],
+                "error":      cache["error"],
+                "seasons":    list(cache["analytics"].keys()),
+            })
+
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -457,13 +550,14 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print("WhistleWatch - Premier League Referee Bias Analyzer")
     print("=" * 55)
-    print(f"  Seasons tracked: {ALL_SEASONS}")
+    print(f"  Seasons: {ALL_SEASONS}")
     print(f"  Open http://localhost:8080")
     print("=" * 55)
 
     print("\nInitializing Firebase...")
     init_firebase()
 
+    # Start load (serves immediately from stored analytics, syncs in background)
     threading.Thread(target=load_data, daemon=True).start()
 
     server = HTTPServer(("0.0.0.0", 8080), Handler)

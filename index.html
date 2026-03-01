@@ -766,28 +766,29 @@ async function pollStatus() {
 }
 
 function updateStatusUI(s) {
-  const dot = document.getElementById('statusDot');
+  const dot  = document.getElementById('statusDot');
   const text = document.getElementById('statusText');
-  const bar = document.getElementById('progressBar');
-  const loadTxt = document.getElementById('loadingText');
-
   dot.className = 'status-dot ' + s.status;
 
   if (s.status === 'loading') {
-    const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0;
-    bar.style.width = pct + '%';
-    loadTxt.textContent = `${s.progress} / ${s.total} matches processed…`;
-    text.textContent = `loading ${pct}%`;
+    text.textContent = 'loading…';
     document.getElementById('loadingScreen').style.display = 'flex';
+    document.getElementById('loadingText').textContent = 'Computing analytics…';
+    document.getElementById('progressBar').style.width = '60%';
   } else if (s.status === 'ready') {
-    const d = new Date(s.lastUpdated * 1000);
-    text.textContent = `${s.matchCount} matches · updated ${d.toLocaleDateString()}`;
+    const d = s.lastUpdated ? new Date(s.lastUpdated * 1000).toLocaleDateString() : '—';
+    // Show syncing indicator subtly if background sync is running
+    text.textContent = `${s.matchCount} matches · ${d}`;
+    document.getElementById('loadingScreen').style.display = 'none';
+  } else if (s.status === 'syncing') {
+    text.textContent = `${s.matchCount} matches · syncing…`;
     document.getElementById('loadingScreen').style.display = 'none';
   } else if (s.status === 'error') {
     text.textContent = 'error — check console';
-    document.getElementById('loadingScreen').innerHTML = `<div class="loading-title" style="color:var(--accent2)">Error Loading Data</div><div class="loading-text">${s.error}</div>`;
+    document.getElementById('loadingScreen').innerHTML =
+      `<div class="loading-title" style="color:var(--accent2)">Error</div><div class="loading-text">${s.error || ''}</div>`;
   } else {
-    text.textContent = 'idle';
+    text.textContent = 'starting…';
   }
 }
 

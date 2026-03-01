@@ -647,8 +647,6 @@ tbody td {
   </div>
 </div>
 
-
-
 <!-- ─── CHARTS TAB ─── -->
 <div class="tab-panel" id="tab-charts">
   <div class="controls">
@@ -691,7 +689,7 @@ function toggleAllSeasons(btn) {
   document.querySelectorAll('.season-chip[data-season]').forEach(c => c.classList.remove('active'));
   document.querySelector('.season-chip-all').classList.add('active');
   updateFilterInfo();
-  if (appData) reloadData();
+  if (rawData) applySeasonFilter();
 }
 
 function toggleSeason(btn) {
@@ -721,14 +719,13 @@ function updateFilterInfo() {
   updateStatusUI();
 }
 
-
-
+// ─── FIX: reloadData was broken (empty fetch call) ───────────────────────────
 async function reloadData() {
-  const res = ;
+  const url = new URL('data.json', window.location.href).href;
+  const res = await fetch(url);
   if (!res.ok) return;
-  appData = await res.json();
-  renderAll();
-  updateFilterInfo();
+  rawData = await res.json();
+  applySeasonFilter();
   updateFilterInfo();
 }
 
@@ -786,7 +783,7 @@ function applySeasonFilter() {
     const s = [...activeSeasons][0];
     appData = rawData.seasons[String(s)] || rawData.all;
   } else {
-    // Multiple seasons — use combined for now
+    // Multiple seasons selected — use combined for now
     appData = rawData.all;
   }
   document.getElementById('loadingScreen').style.display = 'none';
@@ -1092,8 +1089,6 @@ function renderRefDetail() {
     </div>
   `;
 }
-
-
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
 const CHART_COLORS = {

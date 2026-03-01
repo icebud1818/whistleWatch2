@@ -35,7 +35,7 @@ HEADERS = {
 
 COMPETITION_ID = 8
 ALL_SEASONS    = [2022, 2023, 2024, 2025]
-FETCH_WORKERS  = 20
+FETCH_WORKERS  = 5   # reduced to avoid rate limiting
 
 MIN_REF_GAMES      = 3
 MIN_REF_TEAM_GAMES = 1
@@ -155,13 +155,27 @@ def load_matches_from_firestore(seasons=None):
 
 # ─── PL API ───────────────────────────────────────────────────────────────────
 
-def fetch_json(url):
-    req = Request(url, headers=HEADERS)
-    with urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode())
+def fetch_json(url, retries=3):
+    for attempt in range(retries):
+        try:
+            req = Request(url, headers=HEADERS)
+            with urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode()
+            # Check we got JSON and not an HTML error page
+            if not raw.strip().startswith(("{", "[")):
+                raise ValueError(f"Non-JSON response: {raw[:100]}")
+            return json.loads(raw)
+        except ValueError:
+            raise  # don't retry bad responses
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s
+            else:
+                raise
 
 def fetch_match_ids_for_season(season):
     ids = []
+    found_incomplete = False
     for mw in range(1, 39):
         try:
             url = (f"https://sdp-prem-prod.premier-league-prod.pulselive.com"
@@ -169,33 +183,64 @@ def fetch_match_ids_for_season(season):
                    f"/matchweeks/{mw}/matches")
             data = fetch_json(url)
             matches = data.get("data") or data.get("content") or data.get("matches") or []
-            mw_ids = [m.get("matchId") or m.get("id") for m in matches
-                      if m.get("matchId") or m.get("id")]
-            if not mw_ids:
+
+            if not matches:
+                print(f"    MW{mw:02d}: no matches — stopping")
                 break
-            ids.extend(mw_ids)
-            print(f"    MW{mw:02d}: {len(mw_ids)} matches")
+
+            # Only include completed matches — period == "FullTime" or clock has a value
+            completed = []
+            for m in matches:
+                if not isinstance(m, dict):
+                    continue
+                mid = m.get("matchId") or m.get("id")
+                if not mid:
+                    continue
+                period = (m.get("period") or "").strip()
+                clock  = str(m.get("clock") or "").strip()
+                # Completed if period is FullTime or clock has a numeric value
+                if period == "FullTime" or (clock and clock.isdigit()):
+                    completed.append(mid)
+
+            if not completed:
+                print(f"    MW{mw:02d}: no completed matches yet — stopping")
+                break
+
+            ids.extend(completed)
+            print(f"    MW{mw:02d}: {len(completed)} completed matches")
+
         except HTTPError as e:
             if e.code in (400, 404): break
             print(f"    MW{mw:02d}: HTTP {e.code}")
         except Exception as e:
             print(f"    MW{mw:02d}: ERROR — {e}")
-        time.sleep(0.1)
+        time.sleep(0.2)
     return ids
 
-def fetch_match_detail(match_id, season=None):
+def fetch_match_detail(match_id, season=None, debug=False):
     try:
         stats     = fetch_json(f"https://sdp-prem-prod.premier-league-prod.pulselive.com/api/v3/matches/{match_id}/stats")
         officials = fetch_json(f"https://sdp-prem-prod.premier-league-prod.pulselive.com/api/v1/matches/{match_id}/officials")
 
+        if debug:
+            print(f"  [debug] match {match_id} stats type: {type(stats)}")
+            if isinstance(stats, dict):
+                print(f"  [debug] stats keys: {list(stats.keys())[:8]}")
+            elif isinstance(stats, list):
+                print(f"  [debug] stats list len: {len(stats)}, first item keys: {list(stats[0].keys())[:8] if stats else 'empty'}")
+            else:
+                print(f"  [debug] stats raw: {str(stats)[:200]}")
+
         if isinstance(stats, dict):
             stats = stats.get("data") or stats.get("stats") or stats.get("teamStats") or stats.get("content") or []
         if not isinstance(stats, list) or not stats:
+            if debug: print(f"  [debug] stats empty after extraction")
             return None
 
         home = next((s for s in stats if str(s.get("side","")).lower() == "home"), None)
         away = next((s for s in stats if str(s.get("side","")).lower() == "away"), None)
         if not home or not away:
+            if debug: print(f"  [debug] sides found: {[s.get('side') for s in stats]}")
             return None
 
         if isinstance(officials, dict):
@@ -566,22 +611,63 @@ class Handler(BaseHTTPRequestHandler):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import sys
+
     print("WhistleWatch - Premier League Referee Bias Analyzer")
     print("=" * 55)
     print(f"  Seasons: {ALL_SEASONS}")
-    print(f"  Open http://localhost:8080")
     print("=" * 55)
 
     print("\nInitializing Firebase...")
     init_firebase()
 
-    # Start load (serves immediately from stored analytics, syncs in background)
-    threading.Thread(target=load_data, daemon=True).start()
+    if "--export" in sys.argv:
+        print("  Mode: export")
 
-    port = int(os.environ.get("PORT", 8080))
-    print(f"  Port: {port}")
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nServer stopped.")
+        # Sync missing matches to Firestore
+        print("\n  Checking Firestore...")
+        stored_ids = get_stored_match_ids()
+        print(f"  {len(stored_ids)} matches already in DB")
+
+        for season in ALL_SEASONS:
+            print(f"\n  Season {season}...")
+            season_ids = fetch_match_ids_for_season(season)
+            if not season_ids:
+                print(f"  No completed matches yet for {season}")
+                continue
+            missing = [mid for mid in season_ids if str(mid) not in stored_ids]
+            if not missing:
+                print(f"  All {len(season_ids)} matches already in DB — skipping")
+            else:
+                print(f"  {len(missing)} new matches to fetch")
+                fetched = fetch_and_store_missing(missing, season, f"(season {season})")
+                stored_ids.update(str(m["matchId"]) for m in fetched)
+
+        # Rebuild analytics
+        print("\n  Computing analytics...")
+        analytics = rebuild_all_analytics()
+
+        # Write data.json
+        print("\n  Writing data.json...")
+        export = {
+            "all": analytics.get(None, {}),
+            "seasons": {str(s): analytics[s] for s in ALL_SEASONS if s in analytics}
+        }
+        with open("data.json", "w") as f:
+            json.dump(export, f)
+        size_kb = len(json.dumps(export)) // 1024
+        print(f"  data.json written ({size_kb}KB)")
+        print("  Export complete!")
+
+    else:
+        print(f"  Open http://localhost:8080")
+
+        threading.Thread(target=load_data, daemon=True).start()
+
+        port = int(os.environ.get("PORT", 8080))
+        print(f"  Port: {port}")
+        server = HTTPServer(("0.0.0.0", port), Handler)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nServer stopped.")

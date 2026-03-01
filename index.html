@@ -518,6 +518,89 @@ tbody td {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ─ MOBILE ─ */
+@media (max-width: 768px) {
+  /* Header */
+  header {
+    padding: 0 1rem;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 0;
+    padding-top: 0.6rem;
+    padding-bottom: 0;
+  }
+  .logo { font-size: 1.3rem; padding-bottom: 0.5rem; }
+  .header-status { font-size: 0.62rem; padding-bottom: 0.5rem; }
+
+  /* Tabs — scrollable horizontal strip */
+  .tabs {
+    width: 100%;
+    padding: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    border-bottom: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    font-size: 0.8rem;
+    padding: 0.65rem 1rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Season bar */
+  .season-bar { padding: 0.5rem 1rem; gap: 0.4rem; }
+  .filter-info { width: 100%; margin-left: 0; margin-top: 0.25rem; }
+
+  /* Main padding */
+  main { padding: 1rem; }
+
+  /* Stats row — 2 columns on mobile */
+  .stats-row { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
+  .stat-value { font-size: 1.5rem; }
+  .stat-card { padding: 0.9rem; }
+
+  /* Controls stack vertically */
+  .controls { flex-direction: column; align-items: stretch; gap: 0.6rem; }
+  .search-input { width: 100%; }
+  select { width: 100%; }
+
+  /* Tables — horizontal scroll with hint shadow */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* Fade hint on right edge */
+    background:
+      linear-gradient(to right, var(--surface) 30%, transparent),
+      linear-gradient(to left, var(--surface) 30%, transparent) 100% 0,
+      linear-gradient(to right, var(--border), var(--border)),
+      linear-gradient(to left, var(--border), var(--border)) 100% 0;
+    background-repeat: no-repeat;
+    background-size: 40px 100%, 40px 100%, 8px 100%, 8px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+  thead th { font-size: 0.68rem; padding: 0.6rem 0.75rem; }
+  tbody td { padding: 0.55rem 0.75rem; font-size: 0.8rem; }
+
+  /* Ref×Team layout — stack vertically */
+  .ref-team-layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar-list { max-height: 240px; }
+
+  /* Charts — single column */
+  .chart-grid { grid-template-columns: 1fr; gap: 1rem; }
+  .chart-card { padding: 1rem; }
+
+  /* Section headers */
+  .section-header { margin-top: 1.25rem; margin-bottom: 0.75rem; }
+  .section-title { font-size: 0.95rem; }
+
+  /* Detail panel mini stats */
+  .detail-ref-name { font-size: 1.4rem; }
+}
 </style>
 </head>
 <body>
@@ -783,11 +866,10 @@ function applySeasonFilter() {
     const s = [...activeSeasons][0];
     appData = rawData.seasons[String(s)] || rawData.all;
   } else {
+    // Multiple seasons selected — use combined for now
     appData = rawData.all;
   }
   document.getElementById('loadingScreen').style.display = 'none';
-  // Ensure the refs tab is visible after load
-  document.getElementById('tab-refs').classList.add('active');
   renderAll();
   updateFilterInfo();
 }

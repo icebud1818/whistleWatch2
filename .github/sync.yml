@@ -1,0 +1,35 @@
+name: Sync & Deploy
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 6am UTC daily (after overnight matches settle)
+  workflow_dispatch:       # allows manual trigger from GitHub Actions tab
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync matches & export data.json
+        env:
+          FIREBASE_KEY_JSON: ${{ secrets.FIREBASE_KEY_JSON }}
+        run: python3 app.py --export
+
+      - name: Commit data.json if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "chore: sync match data [$(date -u '+%Y-%m-%d')]"
+          git push

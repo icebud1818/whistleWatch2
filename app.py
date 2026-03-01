@@ -77,12 +77,23 @@ db = None
 
 def init_firebase():
     global db
-    if not os.path.exists(FIREBASE_KEY):
+    # Option 1: FIREBASE_KEY_JSON env var (used in GitHub Actions / hosted environments)
+    key_json = os.environ.get("FIREBASE_KEY_JSON")
+    if key_json:
+        import tempfile
+        key_dict = json.loads(key_json)
+        cred = credentials.Certificate(key_dict)
+        print("  Using Firebase credentials from FIREBASE_KEY_JSON env var")
+    # Option 2: local firebase_key.json file (used in local dev)
+    elif os.path.exists(FIREBASE_KEY):
+        cred = credentials.Certificate(FIREBASE_KEY)
+        print(f"  Using Firebase credentials from {FIREBASE_KEY}")
+    else:
         raise FileNotFoundError(
-            f"'{FIREBASE_KEY}' not found. Download from Firebase console → "
-            f"Project Settings → Service Accounts → Generate new private key."
+            f"No Firebase credentials found. Either:\n"
+            f"  - Set the FIREBASE_KEY_JSON environment variable (for hosted/CI), or\n"
+            f"  - Place '{FIREBASE_KEY}' in the same folder as app.py (for local dev)"
         )
-    cred = credentials.Certificate(FIREBASE_KEY)
     firebase_admin.initialize_app(cred, {"projectId": PROJECT_ID})
     db = firestore.client()
     print("  Firebase connected!")

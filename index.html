@@ -711,25 +711,20 @@ function toggleSeason(btn) {
     allBtn.classList.remove('active');
   }
   updateFilterInfo();
-  if (appData) reloadData();
+  if (rawData) applySeasonFilter();
 }
 
 function updateFilterInfo() {
   const el = document.getElementById('filterInfo');
   if (!appData) { el.textContent = ''; return; }
-  const label = activeSeasons.size === 0
-    ? `all ${appData.matchCount} matches`
-    : `${appData.matchCount} matches`;
-  el.textContent = label;
+  el.textContent = `${appData.matchCount} matches`;
+  updateStatusUI();
 }
 
-function getSeasonParam() {
-  if (activeSeasons.size === 0) return '';
-  return '?seasons=' + [...activeSeasons].join(',');
-}
+
 
 async function reloadData() {
-  const res = await fetch('/api/data' + getSeasonParam());
+  const res = await fetch(`${API_BASE}/api/data` + getSeasonParam());
   if (!res.ok) return;
   appData = await res.json();
   renderAll();
@@ -739,6 +734,7 @@ async function reloadData() {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let appData = null;
+let rawData = null;
 let refSortKey = 'games';
 let refSortAsc = false;
 let teamSortKey = 'name';
@@ -751,49 +747,21 @@ let charts = {};
 
 // ─── Polling ─────────────────────────────────────────────────────────────────
 async function pollStatus() {
-  try {
-    const res = await fetch('/api/status');
-    const s = await res.json();
-    updateStatusUI(s);
-    if (s.status === 'ready' && !appData) {
-      await loadData();
-    } else if (s.status === 'loading' || s.status === 'idle') {
-      setTimeout(pollStatus, 2000);
-    }
-  } catch(e) {
-    setTimeout(pollStatus, 3000);
-  }
+  // In static mode, data.json is always ready — just load it directly
+  await loadData();
 }
 
-function updateStatusUI(s) {
+function updateStatusUI() {
+  if (!appData) return;
   const dot  = document.getElementById('statusDot');
   const text = document.getElementById('statusText');
-  dot.className = 'status-dot ' + s.status;
-
-  if (s.status === 'loading') {
-    text.textContent = 'loading…';
-    document.getElementById('loadingScreen').style.display = 'flex';
-    document.getElementById('loadingText').textContent = 'Computing analytics…';
-    document.getElementById('progressBar').style.width = '60%';
-  } else if (s.status === 'ready') {
-    const d = s.lastUpdated ? new Date(s.lastUpdated * 1000).toLocaleDateString() : '—';
-    // Show syncing indicator subtly if background sync is running
-    text.textContent = `${s.matchCount} matches · ${d}`;
-    document.getElementById('loadingScreen').style.display = 'none';
-  } else if (s.status === 'syncing') {
-    text.textContent = `${s.matchCount} matches · syncing…`;
-    document.getElementById('loadingScreen').style.display = 'none';
-  } else if (s.status === 'error') {
-    text.textContent = 'error — check console';
-    document.getElementById('loadingScreen').innerHTML =
-      `<div class="loading-title" style="color:var(--accent2)">Error</div><div class="loading-text">${s.error || ''}</div>`;
-  } else {
-    text.textContent = 'starting…';
-  }
+  dot.className = 'status-dot ready';
+  const d = appData.lastUpdated ? new Date(appData.lastUpdated * 1000).toLocaleDateString() : '—';
+  text.textContent = `${appData.matchCount} matches · ${d}`;
 }
 
 async function loadData() {
-  const res = await fetch('/api/data');
+  const res = await fetch(`${API_BASE}/api/data`);
   if (!res.ok) return;
   appData = await res.json();
   renderAll();
@@ -1230,7 +1198,7 @@ pollStatus();
 // If data was already ready, poll again in case we missed it
 setTimeout(async () => {
   if (!appData) {
-    const res = await fetch('/api/status');
+    const res = await fetch(`${API_BASE}/api/status`);
     const s = await res.json();
     if (s.status === 'ready') await loadData();
   }

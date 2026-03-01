@@ -507,6 +507,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", len(body))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -555,6 +557,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self): self.do_GET()
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.end_headers()
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -571,7 +578,9 @@ if __name__ == "__main__":
     # Start load (serves immediately from stored analytics, syncs in background)
     threading.Thread(target=load_data, daemon=True).start()
 
-    server = HTTPServer(("0.0.0.0", 8080), Handler)
+    port = int(os.environ.get("PORT", 8080))
+    print(f"  Port: {port}")
+    server = HTTPServer(("0.0.0.0", port), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
